@@ -1,0 +1,101 @@
+# =============================================================================
+# ci-pipeline.yml — Azure DevOps CI Pipeline
+# =============================================================================
+#
+# 📌 FOR ENTERPRISE ADO SHOPS:
+#   This is the Azure DevOps equivalent of .github/workflows/ci.yml.
+#   Same concepts, different YAML syntax.
+#
+# DIFFERENCES FROM GITHUB ACTIONS:
+#   - Uses `pool` instead of `runs-on`
+#   - Uses `task` instead of `uses`
+#   - Uses `$(variable)` instead of `${{ vars.X }}`
+#   - Uses Service Connections instead of OIDC federation
+#   - Uses Azure DevOps Environments instead of GitHub Environments
+#
+# SETUP:
+#   1. Create a Service Connection to your Azure subscription
+#   2. Create an Azure DevOps Environment for each target (dev, test, prod)
+#   3. Set pipeline variables for AZURE_AI_PROJECT_ENDPOINT
+#
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - src/**
+      - config/**
+      - infra/**
+      - .azdo/**
+
+pr:
+  branches:
+    include:
+      - main
+
+# -----------------------------------------------------------------------
+# AGENT POOL CONFIGURATION
+# -----------------------------------------------------------------------
+# Microsoft-hosted agent — recommended for CI (no infrastructure to manage).
+# Requires hosted parallelism grant for new ADO orgs:
+#   https://aka.ms/azpipelines-parallelism-request
+#
+# For self-hosted agents, replace with:
+#   pool:
+#     name: "Default"   # or your custom pool name
+# -----------------------------------------------------------------------
+pool:
+  vmImage: "ubuntu-latest"
+
+steps:
+  # ---------------------------------------------------------------------------
+  # Step 1: Set up Python
+  # ---------------------------------------------------------------------------
+  # UsePythonVersion@0 is an ADO-native task that configures the PATH.
+  # On Microsoft-hosted agents, multiple Python versions are pre-installed.
+  # On self-hosted agents, the requested version must be installed manually.
+  # ---------------------------------------------------------------------------
+  - task: UsePythonVersion@0
+    displayName: "Set up Python 3.12"
+    inputs:
+      versionSpec: "3.12"
+
+  # ---------------------------------------------------------------------------
+  # Step 2: Install dependencies
+  # ---------------------------------------------------------------------------
+  - script: python -m pip install -e ".[dev]"
+    displayName: "Install dependencies"
+
+  # ---------------------------------------------------------------------------
+  # Step 3: Lint
+  # ---------------------------------------------------------------------------
+  - script: python -m ruff check src/
+    displayName: "Lint with ruff"
+
+  # ---------------------------------------------------------------------------
+  # Step 4: Unit tests
+  # ---------------------------------------------------------------------------
+  - script: python -m pytest src/tests/unit/ -v --junitxml=test-results.xml
+    displayName: "Run unit tests"
+
+  # ---------------------------------------------------------------------------
+  # Publish test results so they appear in the ADO "Tests" tab
+  # ---------------------------------------------------------------------------
+  - task: PublishTestResults@2
+    condition: always()
+    inputs:
+      testResultsFormat: "JUnit"
+      testResultsFiles: "test-results.xml"
+    displayName: "Publish test results"
+
+  # ---------------------------------------------------------------------------
+  # Step 5: Dry-run deployment — validates config without deploying
+  # ---------------------------------------------------------------------------
+  - script: python src/scripts/deploy_agent.py --env dev --dry-run
+    displayName: "Dry-run deployment (dev)"
+
+  - script: python src/scripts/deploy_agent.py --env prod --dry-run
+    displayName: "Dry-run deployment (prod)"

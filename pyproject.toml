@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "foundry-agents-lifecycle"
+version = "0.1.0"
+description = "Reference demo: CI/CD for Microsoft Foundry Agents"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# =============================================================================
+# CORE DEPENDENCIES
+# =============================================================================
+# azure-ai-projects  — The SDK that creates/manages Foundry agents programmatically.
+#                       This is THE key dependency. Without it, there's no CI/CD.
+#
+# azure-identity     — Handles authentication to Azure (DefaultAzureCredential).
+#                       Works with managed identity in pipelines, az login locally.
+#
+# python-dotenv      — Loads .env files for local development.
+#                       In CI/CD, environment variables come from pipeline config.
+# =============================================================================
+dependencies = [
+    "azure-ai-projects>=2.0.0",
+    "azure-identity>=1.19.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+# Dev dependencies — only needed for local development and testing
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.8.0",
+]
+# Evaluation dependencies — needed for real (non-simulated) agent evaluation
+eval = [
+    "azure-ai-evaluation>=1.0.0",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
+asyncio_mode = "auto"

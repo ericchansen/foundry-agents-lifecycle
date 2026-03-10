@@ -1,0 +1,89 @@
+# =============================================================================
+# cd-pipeline.yml — Azure DevOps CD Pipeline (Multi-Stage)
+# =============================================================================
+#
+# 📌 FOR ENTERPRISE ADO SHOPS:
+#   This is the Azure DevOps equivalent of .github/workflows/cd.yml.
+#
+# HOW IT WORKS:
+#   Stage 1: Deploy IaC + Agent to DEV (automatic)
+#   Stage 2: Deploy IaC + Agent to TEST (manual approval via ADO Environment)
+#   Stage 3: Deploy IaC + Agent to PROD (manual approval via ADO Environment)
+#
+# 🧠 DUAL-PIPELINE ISOLATION:
+#   This pipeline uses pipelineSource=ado, which creates resource groups like
+#   rg-foundry-ado-dev, rg-foundry-ado-test, rg-foundry-ado-prod.
+#   The GitHub Actions pipeline (cd.yml) uses pipelineSource=github, creating
+#   rg-foundry-github-dev, etc. Both pipelines can coexist in the same
+#   subscription without conflicts.
+#
+# 📐 YAML TEMPLATES:
+#   Each stage uses a reusable template (templates/deploy-stage.yml) instead
+#   of duplicating 6 steps per environment. This is an ADO best practice
+#   for reducing YAML duplication and ensuring consistency.
+#   Docs: https://learn.microsoft.com/azure/devops/pipelines/process/templates
+#
+# KEY DIFFERENCES FROM GITHUB ACTIONS:
+#   - Uses "stages" with "deployments" and "environments"
+#   - Uses Azure Service Connections for authentication (not OIDC)
+#   - Uses `$(System.AccessToken)` for pipeline identity
+#   - Approvals are configured on the ADO Environment, not in YAML
+#
+# SETUP REQUIRED:
+#   1. Create Service Connections (Project Settings → Service Connections):
+#      - 'azure-dev' → Dev subscription/scope
+#      - 'azure-test' → Test subscription/scope
+#      - 'azure-prod' → Prod subscription/scope
+#      The service principal needs Contributor at SUBSCRIPTION level.
+#
+#   2. ADO Environments are auto-created on first run. Then configure:
+#      - 'dev' → no approvals (auto-deploy)
+#      - 'test' → require 1 approver
+#      - 'prod' → require 2 approvers + business hours check
+#      Go to: Project Settings → Environments → [env] → Approvals and Checks
+#
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - main
+
+# -----------------------------------------------------------------------
+# AGENT POOL CONFIGURATION
+# -----------------------------------------------------------------------
+# Microsoft-hosted agent — recommended (no infrastructure to manage).
+# For self-hosted: replace with `pool: { name: "Default" }`
+# -----------------------------------------------------------------------
+pool:
+  vmImage: "ubuntu-latest"
+
+# =============================================================================
+# STAGES — Each references the reusable deploy template
+# =============================================================================
+# The template handles: checkout, Python setup, pip install, Bicep deployment,
+# agent deployment, and evaluation. Parameters customize per environment.
+# =============================================================================
+stages:
+  # Stage 1: DEV — automatic (no approvals)
+  - template: templates/deploy-stage.yml
+    parameters:
+      environment: dev
+      serviceConnection: azure-dev
+      pipelineSource: ado
+
+  # Stage 2: TEST — requires approval (configure in ADO Environment settings)
+  - template: templates/deploy-stage.yml
+    parameters:
+      environment: test
+      serviceConnection: azure-test
+      pipelineSource: ado
+      dependsOn: Deploy_dev
+
+  # Stage 3: PROD — requires stricter approval
+  - template: templates/deploy-stage.yml
+    parameters:
+      environment: prod
+      serviceConnection: azure-prod
+      pipelineSource: ado
+      dependsOn: Deploy_test

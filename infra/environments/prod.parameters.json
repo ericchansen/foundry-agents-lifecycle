@@ -1,0 +1,26 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "baseName": { "value": "foundry-demo" },
+        "environment": { "value": "prod" },
+        "modelDeployments": {
+            "value": [
+                {
+                    "name": "gpt-4o",
+                    "model": "gpt-4o",
+                    "version": "2024-11-20",
+                    "sku": "GlobalStandard",
+                    "capacity": 50
+                },
+                {
+                    "name": "gpt-4o-mini",
+                    "model": "gpt-4o-mini",
+                    "version": "2024-07-18",
+                    "sku": "GlobalStandard",
+                    "capacity": 30
+                }
+            ]
+        }
+    }
+}

@@ -1,0 +1,350 @@
+# =============================================================================
+# cd.yml — Continuous Deployment (Deploy to Environments)
+# =============================================================================
+#
+# WHEN THIS RUNS:
+#   When code is merged to 'main' (after CI passes).
+#
+# WHAT IT DOES:
+#   1. Deploys infrastructure (IaC) to create/update the resource group + resources
+#   2. Deploys the agent into that infrastructure
+#   3. Runs evaluation against the deployed agent
+#   4. Promotes through DEV → TEST → PROD with approval gates
+#
+# 🧠 KEY CONCEPTS:
+#   - OIDC federation: No secrets stored in GitHub! The pipeline authenticates
+#     to Azure using a federated identity credential.
+#   - Environment protection: GitHub Environments enforce approval gates.
+#   - Same code, different configs: Each environment uses its own
+#     config/agent-config.{env}.json file.
+#   - Subscription-level IaC: Infrastructure is deployed at the subscription
+#     level so each pipeline system (GitHub/ADO) gets its own resource group.
+#     This pipeline uses pipelineSource=github, creating resource groups like
+#     rg-foundry-github-dev, rg-foundry-github-test, rg-foundry-github-prod.
+#
+# SETUP REQUIRED:
+#   1. Create a Microsoft Entra ID app registration
+#   2. Add federated credentials for GitHub Actions
+#   3. Create GitHub Environments (dev, test, prod) with protection rules
+#   4. Set environment secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   5. The pipeline identity needs Contributor at the SUBSCRIPTION level
+#      (to create resource groups via subscription-level deployments)
+#
+# See: https://learn.microsoft.com/azure/developer/github/connect-from-azure
+#
+# KEY DECISIONS (modify these for your organization):
+#
+#   PROMOTION: DEV (auto) → TEST (approval) → PROD (approval)
+#     Change the 'needs:' clause if you want different gates.
+#
+#   AUTH: OIDC federation (no secrets stored in GitHub)
+#     Docs: https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect
+#
+#   INFRA: Subscription-level Bicep (creates resource groups dynamically)
+#     For resource-group-only access, change to 'az deployment group create'
+#
+#   EVALUATION: Runs after every deployment. Blocks promotion if score < threshold.
+#     Control thresholds in config/agent-config.{env}.json
+#
+# =============================================================================
+
+name: CD — Deploy Agent to Environments
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Allow manual re-runs from the Actions tab
+
+permissions:
+  id-token: write   # Required for OIDC authentication to Azure
+  contents: read
+
+# =============================================================================
+# DEPLOY TO DEV — Automatic (no approval needed)
+# =============================================================================
+jobs:
+  deploy-dev:
+    name: Deploy to DEV
+    runs-on: ubuntu-latest
+    environment: dev  # GitHub Environment (can have protection rules)
+    env:
+      # -----------------------------------------------------------------------
+      # Pipeline-specific variables
+      # -----------------------------------------------------------------------
+      # ENVIRONMENT: Which stage we're deploying to (dev/test/prod)
+      # AZURE_RESOURCE_GROUP: The resource group this pipeline owns.
+      #   GitHub Actions always deploys to rg-foundry-github-{env}.
+      #   Azure DevOps deploys to rg-foundry-ado-{env} (see cd-pipeline.yml).
+      #   This isolation prevents the two pipelines from stomping on each other.
+      # -----------------------------------------------------------------------
+      ENVIRONMENT: dev
+      AZURE_RESOURCE_GROUP: rg-foundry-github-dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[eval]"
+
+      # -----------------------------------------------------------------------
+      # Authenticate to Azure using OIDC (no secrets needed!)
+      # -----------------------------------------------------------------------
+      # This uses OpenID Connect federation. Instead of storing a client
+      # secret in GitHub, Azure trusts GitHub's identity token.
+      #
+      # Setup: az ad app federated-credential create ...
+      # See docs/architecture.md for full setup instructions.
+      # -----------------------------------------------------------------------
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # -----------------------------------------------------------------------
+      # Deploy Infrastructure (IaC)
+      # -----------------------------------------------------------------------
+      # This is a SUBSCRIPTION-LEVEL deployment. It:
+      #   1. Creates the resource group (rg-foundry-github-dev)
+      #   2. Deploys all Azure resources into it (AI Foundry, models, Key Vault)
+      #   3. Outputs the project endpoint for the agent deploy step
+      #
+      # Why "az deployment sub create" instead of "az deployment group create"?
+      #   Because we need to CREATE the resource group itself. A group-level
+      #   deployment can only deploy INTO an existing resource group.
+      #
+      # The pipelineSource=github parameter ensures this pipeline's resources
+      # are isolated from Azure DevOps pipeline resources (pipelineSource=ado).
+      # -----------------------------------------------------------------------
+      - name: Deploy Infrastructure
+        id: deploy-infra
+        run: |
+          set -euo pipefail
+          echo "🏗️ Deploying infrastructure to ${{ env.AZURE_RESOURCE_GROUP }}..."
+
+          # Get the pipeline identity's object ID for RBAC assignments
+          DEPLOYER_OID=$(az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query id -o tsv 2>/dev/null || echo "")
+
+          # Retry loop — Azure Cognitive Services sometimes returns RequestConflict
+          # when multiple resources deploy on the same account in quick succession.
+          for attempt in 1 2 3; do
+            echo "  Attempt ${attempt}/3..."
+            if az deployment sub create \
+              --location eastus2 \
+              --name "github-${{ env.ENVIRONMENT }}-$(date +%Y%m%d-%H%M%S)" \
+              --template-file infra/deploy-infra.bicep \
+              --parameters environment=${{ env.ENVIRONMENT }} pipelineSource=github \
+              --parameters infra/environments/${{ env.ENVIRONMENT }}.parameters.json \
+              --parameters deployerPrincipalId="${DEPLOYER_OID}" \
+              --query 'properties.outputs' -o json > /tmp/infra-outputs.json; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "❌ Infrastructure deployment failed after 3 attempts"
+              exit 1
+            fi
+            echo "  ⚠️ Deployment failed (likely RequestConflict). Retrying in 60s..."
+            sleep 60
+          done
+
+          # Capture and validate the project endpoint from Bicep outputs
+          PROJECT_ENDPOINT=$(jq -r '.projectEndpoint.value' /tmp/infra-outputs.json)
+          if [[ -z "$PROJECT_ENDPOINT" || "$PROJECT_ENDPOINT" == "null" ]]; then
+            echo "❌ Failed to extract project endpoint from deployment outputs"
+            cat /tmp/infra-outputs.json
+            exit 1
+          fi
+          echo "PROJECT_ENDPOINT=${PROJECT_ENDPOINT}" >> $GITHUB_ENV
+          echo "✅ Infrastructure deployed. Project endpoint: ${PROJECT_ENDPOINT}"
+
+      # -----------------------------------------------------------------------
+      # Deploy the agent to DEV
+      # -----------------------------------------------------------------------
+      # The AZURE_AI_PROJECT_ENDPOINT is dynamically set from the IaC
+      # output above — no need to manually configure it per environment.
+      # -----------------------------------------------------------------------
+      - name: Deploy Agent to DEV
+        env:
+          AZURE_AI_PROJECT_ENDPOINT: ${{ env.PROJECT_ENDPOINT }}
+          GIT_SHA: ${{ github.sha }}
+        run: python src/scripts/deploy_agent.py --env dev
+
+      # -----------------------------------------------------------------------
+      # Run evaluation against DEV
+      # -----------------------------------------------------------------------
+      - name: Evaluate Agent (DEV)
+        env:
+          AZURE_AI_PROJECT_ENDPOINT: ${{ env.PROJECT_ENDPOINT }}
+          USE_REAL_EVALUATION: "true"
+        run: python src/scripts/run_evaluation.py --env dev
+
+# =============================================================================
+# DEPLOY TO TEST — Requires manual approval
+# =============================================================================
+  deploy-test:
+    name: Deploy to TEST
+    needs: deploy-dev  # Only runs after DEV succeeds
+    runs-on: ubuntu-latest
+    environment: test  # Configure required reviewers in GitHub settings
+    env:
+      ENVIRONMENT: test
+      AZURE_RESOURCE_GROUP: rg-foundry-github-test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[eval]"
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # -----------------------------------------------------------------------
+      # Deploy Infrastructure (IaC) — same pattern as DEV
+      # -----------------------------------------------------------------------
+      - name: Deploy Infrastructure
+        id: deploy-infra
+        run: |
+          set -euo pipefail
+          echo "🏗️ Deploying infrastructure to ${{ env.AZURE_RESOURCE_GROUP }}..."
+
+          DEPLOYER_OID=$(az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query id -o tsv 2>/dev/null || echo "")
+
+          for attempt in 1 2 3; do
+            echo "  Attempt ${attempt}/3..."
+            if az deployment sub create \
+              --location eastus2 \
+              --name "github-${{ env.ENVIRONMENT }}-$(date +%Y%m%d-%H%M%S)" \
+              --template-file infra/deploy-infra.bicep \
+              --parameters environment=${{ env.ENVIRONMENT }} pipelineSource=github \
+              --parameters infra/environments/${{ env.ENVIRONMENT }}.parameters.json \
+              --parameters deployerPrincipalId="${DEPLOYER_OID}" \
+              --query 'properties.outputs' -o json > /tmp/infra-outputs.json; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "❌ Infrastructure deployment failed after 3 attempts"
+              exit 1
+            fi
+            echo "  ⚠️ Deployment failed (likely RequestConflict). Retrying in 60s..."
+            sleep 60
+          done
+
+          PROJECT_ENDPOINT=$(jq -r '.projectEndpoint.value' /tmp/infra-outputs.json)
+          if [[ -z "$PROJECT_ENDPOINT" || "$PROJECT_ENDPOINT" == "null" ]]; then
+            echo "❌ Failed to extract project endpoint from deployment outputs"
+            cat /tmp/infra-outputs.json
+            exit 1
+          fi
+          echo "PROJECT_ENDPOINT=${PROJECT_ENDPOINT}" >> $GITHUB_ENV
+          echo "✅ Infrastructure deployed. Project endpoint: ${PROJECT_ENDPOINT}"
+
+      - name: Deploy Agent to TEST
+        env:
+          AZURE_AI_PROJECT_ENDPOINT: ${{ env.PROJECT_ENDPOINT }}
+          GIT_SHA: ${{ github.sha }}
+        run: python src/scripts/deploy_agent.py --env test
+
+      - name: Evaluate Agent (TEST)
+        env:
+          AZURE_AI_PROJECT_ENDPOINT: ${{ env.PROJECT_ENDPOINT }}
+          USE_REAL_EVALUATION: "true"
+        run: python src/scripts/run_evaluation.py --env test
+
+# =============================================================================
+# DEPLOY TO PROD — Requires manual approval (stricter)
+# =============================================================================
+  deploy-prod:
+    name: Deploy to PROD
+    needs: deploy-test  # Only runs after TEST succeeds
+    runs-on: ubuntu-latest
+    environment: prod  # Configure required reviewers + wait timer
+    env:
+      ENVIRONMENT: prod
+      AZURE_RESOURCE_GROUP: rg-foundry-github-prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e ".[eval]"
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # -----------------------------------------------------------------------
+      # Deploy Infrastructure (IaC) — same pattern as DEV/TEST
+      # -----------------------------------------------------------------------
+      - name: Deploy Infrastructure
+        id: deploy-infra
+        run: |
+          set -euo pipefail
+          echo "🏗️ Deploying infrastructure to ${{ env.AZURE_RESOURCE_GROUP }}..."
+
+          DEPLOYER_OID=$(az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query id -o tsv 2>/dev/null || echo "")
+
+          for attempt in 1 2 3; do
+            echo "  Attempt ${attempt}/3..."
+            if az deployment sub create \
+              --location eastus2 \
+              --name "github-${{ env.ENVIRONMENT }}-$(date +%Y%m%d-%H%M%S)" \
+              --template-file infra/deploy-infra.bicep \
+              --parameters environment=${{ env.ENVIRONMENT }} pipelineSource=github \
+              --parameters infra/environments/${{ env.ENVIRONMENT }}.parameters.json \
+              --parameters deployerPrincipalId="${DEPLOYER_OID}" \
+              --query 'properties.outputs' -o json > /tmp/infra-outputs.json; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "❌ Infrastructure deployment failed after 3 attempts"
+              exit 1
+            fi
+            echo "  ⚠️ Deployment failed (likely RequestConflict). Retrying in 60s..."
+            sleep 60
+          done
+
+          PROJECT_ENDPOINT=$(jq -r '.projectEndpoint.value' /tmp/infra-outputs.json)
+          if [[ -z "$PROJECT_ENDPOINT" || "$PROJECT_ENDPOINT" == "null" ]]; then
+            echo "❌ Failed to extract project endpoint from deployment outputs"
+            cat /tmp/infra-outputs.json
+            exit 1
+          fi
+          echo "PROJECT_ENDPOINT=${PROJECT_ENDPOINT}" >> $GITHUB_ENV
+          echo "✅ Infrastructure deployed. Project endpoint: ${PROJECT_ENDPOINT}"
+
+      - name: Deploy Agent to PROD
+        env:
+          AZURE_AI_PROJECT_ENDPOINT: ${{ env.PROJECT_ENDPOINT }}
+          GIT_SHA: ${{ github.sha }}
+        run: python src/scripts/deploy_agent.py --env prod
+
+      - name: Evaluate Agent (PROD)
+        env:
+          AZURE_AI_PROJECT_ENDPOINT: ${{ env.PROJECT_ENDPOINT }}
+          USE_REAL_EVALUATION: "true"
+        # In prod, evaluation failure BLOCKS the deployment
+        run: python src/scripts/run_evaluation.py --env prod

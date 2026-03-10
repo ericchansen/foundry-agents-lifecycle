@@ -1,0 +1,148 @@
+# =============================================================================
+# deploy-stage.yml — Reusable ADO YAML Template for Deploy Stages
+# =============================================================================
+#
+# 📌 ADO YAML TEMPLATES:
+#   Templates let you define reusable pipeline logic. Instead of copy-pasting
+#   the same 6 steps for DEV, TEST, and PROD, you define it once here and
+#   reference it with parameters.
+#
+#   Docs: https://learn.microsoft.com/azure/devops/pipelines/process/templates
+#
+# USAGE:
+#   - template: templates/deploy-stage.yml
+#     parameters:
+#       environment: dev
+#       serviceConnection: azure-dev
+#       pipelineSource: ado
+#
+# =============================================================================
+
+parameters:
+  # Required parameters
+  - name: environment
+    type: string
+    values: [dev, test, prod]
+  - name: serviceConnection
+    type: string
+  - name: pipelineSource
+    type: string
+    default: ado
+
+  # Optional: Override resource group naming
+  - name: resourceGroupPrefix
+    type: string
+    default: rg-foundry
+
+  # Optional: Depends on another stage
+  - name: dependsOn
+    type: string
+    default: ""
+
+stages:
+  - stage: Deploy_${{ parameters.environment }}
+    displayName: "Deploy to ${{ upper(parameters.environment) }}"
+    ${{ if ne(parameters.dependsOn, '') }}:
+      dependsOn: ${{ parameters.dependsOn }}
+      condition: succeeded()
+    variables:
+      ENVIRONMENT: ${{ parameters.environment }}
+      AZURE_RESOURCE_GROUP: ${{ parameters.resourceGroupPrefix }}-${{ parameters.pipelineSource }}-${{ parameters.environment }}
+    jobs:
+      - deployment: deploy_${{ parameters.environment }}
+        displayName: "Deploy Agent to ${{ upper(parameters.environment) }}"
+        # ---------------------------------------------------------------
+        # ADO Environments — approval gates configured in Project Settings
+        # ---------------------------------------------------------------
+        # Go to: Project Settings → Environments → [env] → Approvals and Checks
+        #   - dev: no approvals (auto-deploy)
+        #   - test: require 1 approver
+        #   - prod: require 2 approvers + business hours check
+        #
+        # Environments are created automatically on first pipeline run.
+        # ---------------------------------------------------------------
+        environment: ${{ parameters.environment }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: UsePythonVersion@0
+                  displayName: "Set up Python"
+                  inputs:
+                    versionSpec: "3.12"
+
+                - task: CmdLine@2
+                  displayName: "Install dependencies"
+                  inputs:
+                    script: python -m pip install -e ".[eval]"
+
+                # -----------------------------------------------------------
+                # Deploy Infrastructure (IaC) — Subscription-Level Deployment
+                # -----------------------------------------------------------
+                # Bicep creates the resource group + all Azure resources.
+                # pipelineSource isolates ADO and GitHub pipeline resources.
+                # -----------------------------------------------------------
+                - task: AzureCLI@2
+                  displayName: "Deploy Infrastructure"
+                  name: deployInfra
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      set -euo pipefail
+                      echo "🏗️ Deploying infrastructure to $(AZURE_RESOURCE_GROUP)..."
+                      az deployment sub create \
+                        --location eastus2 \
+                        --name "${{ parameters.pipelineSource }}-$(ENVIRONMENT)-$(date +%Y%m%d-%H%M%S)" \
+                        --template-file infra/deploy-infra.bicep \
+                        --parameters environment=$(ENVIRONMENT) pipelineSource=${{ parameters.pipelineSource }} \
+                        --parameters infra/environments/$(ENVIRONMENT).parameters.json \
+                        --query 'properties.outputs' -o json > /tmp/infra-outputs.json
+
+                      PROJECT_ENDPOINT=$(jq -r '.projectEndpoint.value' /tmp/infra-outputs.json)
+                      if [[ -z "$PROJECT_ENDPOINT" || "$PROJECT_ENDPOINT" == "null" ]]; then
+                        echo "❌ Failed to extract project endpoint from deployment outputs"
+                        cat /tmp/infra-outputs.json
+                        exit 1
+                      fi
+                      echo "##vso[task.setvariable variable=PROJECT_ENDPOINT;isOutput=true]${PROJECT_ENDPOINT}"
+                      echo "✅ Infrastructure deployed. Project endpoint: ${PROJECT_ENDPOINT}"
+
+                # -----------------------------------------------------------
+                # Deploy Agent — SDK-based creation/update
+                # -----------------------------------------------------------
+                - task: AzureCLI@2
+                  displayName: "Deploy Agent"
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      python src/scripts/deploy_agent.py --env $(ENVIRONMENT)
+                  env:
+                    AZURE_AI_PROJECT_ENDPOINT: $(deployInfra.PROJECT_ENDPOINT)
+                    GIT_SHA: $(Build.SourceVersion)
+
+                # -----------------------------------------------------------
+                # Evaluate Agent — Quality gate with 6 evaluators
+                # -----------------------------------------------------------
+                # Evaluators: groundedness, relevance, coherence,
+                #             task_adherence, intent_resolution, tool_call_accuracy
+                #
+                # Thresholds are defined in config/agent-config.{env}.json.
+                # If any threshold fails, the pipeline stops.
+                # -----------------------------------------------------------
+                - task: AzureCLI@2
+                  displayName: "Evaluate Agent"
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      python src/scripts/run_evaluation.py --env $(ENVIRONMENT)
+                  env:
+                    AZURE_AI_PROJECT_ENDPOINT: $(deployInfra.PROJECT_ENDPOINT)
+                    USE_REAL_EVALUATION: "true"

@@ -1,0 +1,31 @@
+{
+    "agent": {
+        "name": "foundry-demo-agent-prod",
+        "model": "gpt-4o",
+        "instructions_file": "src/agent/prompts/system_prompt.prod.md",
+
+        "tools": [
+            { "type": "code_interpreter" },
+            { "type": "function", "function_name": "calculator" }
+        ],
+
+        "metadata": {
+            "environment": "prod",
+            "deployed_by": "ci-cd-pipeline",
+            "version": "will-be-set-by-pipeline"
+        }
+    },
+
+    "evaluation": {
+        "enabled": true,
+        "dataset": "src/tests/integration/eval_dataset.jsonl",
+        "thresholds": {
+            "groundedness": 4.0,
+            "relevance": 4.0,
+            "coherence": 4.0,
+            "task_adherence": 4.0,
+            "intent_resolution": 4.0,
+            "tool_call_accuracy": 4.0
+        }
+    }
+}

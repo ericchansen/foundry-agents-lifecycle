@@ -1,0 +1,99 @@
+# =============================================================================
+# ci.yml — Continuous Integration (PR Validation)
+# =============================================================================
+#
+# WHEN THIS RUNS:
+#   Every time a Pull Request is opened or updated against 'main'.
+#
+# WHAT IT DOES:
+#   1. Lints the code (catches formatting/style issues)
+#   2. Runs unit tests (validates agent config logic)
+#   3. Dry-runs the agent deployment (validates config without deploying)
+#
+# WHY THIS MATTERS:
+#   Catches problems BEFORE they reach any environment.
+#   A failing CI means the PR can't be merged.
+#
+# =============================================================================
+
+name: CI — Validate Agent Changes
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]  # Also run on direct pushes to main
+
+# ---------------------------------------------------------------------------
+# PERMISSIONS
+# ---------------------------------------------------------------------------
+# Minimal permissions — only what's needed.
+# The CI pipeline doesn't deploy anything, so it doesn't need Azure access.
+# ---------------------------------------------------------------------------
+permissions:
+  contents: read
+  pull-requests: write  # To post CI results as PR comments
+
+jobs:
+  validate:
+    name: Lint, Test, and Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Step 1: Check out the code
+      # -----------------------------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Step 2: Set up Python
+      # -----------------------------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # -----------------------------------------------------------------------
+      # Step 3: Install dependencies
+      # -----------------------------------------------------------------------
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      # -----------------------------------------------------------------------
+      # Step 4: Lint with ruff
+      # -----------------------------------------------------------------------
+      # Ruff is a fast Python linter. It catches:
+      #   - Import ordering issues
+      #   - Unused variables
+      #   - Style violations
+      #   - Common bugs
+      # -----------------------------------------------------------------------
+      - name: Lint with ruff
+        run: ruff check src/
+
+      # -----------------------------------------------------------------------
+      # Step 5: Run unit tests
+      # -----------------------------------------------------------------------
+      # Unit tests validate that:
+      #   - Agent config files are valid JSON
+      #   - Config loading logic works correctly
+      #   - Tool definitions are well-formed
+      #   - Prompt files exist where referenced
+      # -----------------------------------------------------------------------
+      - name: Run unit tests
+        run: pytest src/tests/unit/ -v
+
+      # -----------------------------------------------------------------------
+      # Step 6: Dry-run agent deployment
+      # -----------------------------------------------------------------------
+      # This validates that the agent config can be loaded and converted
+      # to SDK parameters WITHOUT actually calling the Foundry API.
+      # Catches config errors before they reach deployment.
+      # -----------------------------------------------------------------------
+      - name: Dry-run deployment (dev)
+        run: python src/scripts/deploy_agent.py --env dev --dry-run
+
+      - name: Dry-run deployment (prod)
+        run: python src/scripts/deploy_agent.py --env prod --dry-run

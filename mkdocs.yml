@@ -1,0 +1,93 @@
+site_name: Foundry Agents Lifecycle
+site_description: >-
+  Educational guide to CI/CD for Microsoft Foundry agents.
+  Learn how to build, deploy, evaluate, and promote AI agents
+  across environments using code-first practices.
+site_url: https://ericchansen.github.io/foundry-agents-lifecycle/
+
+repo_url: https://github.com/ericchansen/foundry-agents-lifecycle
+repo_name: ericchansen/foundry-agents-lifecycle
+docs_dir: docs-site
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Quick Start: getting-started/quick-start.md
+    - Prerequisites: getting-started/prerequisites.md
+  - Core Concepts:
+    - The Mental Model: concepts/mental-model.md
+    - Agent Definition: concepts/agent-definition.md
+    - Per-Environment Configs: concepts/environment-configs.md
+    - Evaluation Quality Gates: concepts/evaluation.md
+  - CI/CD Pipelines:
+    - Overview: pipelines/overview.md
+    - GitHub Actions: pipelines/github-actions.md
+    - Azure DevOps: pipelines/azure-devops.md
+    - OIDC Authentication: pipelines/oidc-setup.md
+  - Infrastructure:
+    - Bicep Modules: infrastructure/bicep.md
+    - Environment Parameters: infrastructure/parameters.md
+  - Advanced Topics:
+    - Logic Apps CI/CD: advanced/logic-apps.md
+    - Portal to Code Migration: advanced/portal-to-code.md
+    - Multi-Subscription Environments: advanced/multi-subscription.md
+  - Architecture Decisions: architecture.md
+  - FAQ: faq.md

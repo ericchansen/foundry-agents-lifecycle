@@ -1,0 +1,10 @@
+{"question": "What is 15 times 8?", "expected_answer": "120", "category": "arithmetic"}
+{"question": "Calculate 144 divided by 12.", "expected_answer": "12", "category": "arithmetic"}
+{"question": "What's 1,024 minus 256?", "expected_answer": "768", "category": "arithmetic"}
+{"question": "If I buy 3 items at $24.99 each, what's my total?", "expected_answer": "74.97", "category": "reasoning"}
+{"question": "I drove 450 miles and used 15 gallons of gas. What was my fuel efficiency in miles per gallon?", "expected_answer": "30", "category": "reasoning"}
+{"question": "A recipe calls for 2.5 cups of flour but I want to make a triple batch. How much flour do I need?", "expected_answer": "7.5", "category": "reasoning"}
+{"question": "What can you help me with?", "expected_answer": "calculator", "category": "general"}
+{"question": "What happens if I try to divide 10 by 0?", "expected_answer": "division by zero", "category": "arithmetic"}
+{"question": "What is 999999 multiplied by 999999?", "expected_answer": "999998000001", "category": "arithmetic"}
+{"question": "I have a budget of $500. If I spend $127.50 on groceries and $84.30 on gas, how much do I have left?", "expected_answer": "288.20", "category": "reasoning"}

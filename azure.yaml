@@ -1,0 +1,62 @@
+# =============================================================================
+# azure.yaml — Azure Developer CLI (azd) project configuration
+# =============================================================================
+#
+# HOW THIS FILE WORKS:
+#   azd reads this file to understand your project structure.
+#   When you run `azd up`, it:
+#     1. Provisions infrastructure defined in infra/ (Bicep)
+#     2. Deploys model deployments listed below
+#     3. Builds & pushes containers (if hosted agents)
+#     4. Creates the agent in Foundry
+#
+# WHY THIS MATTERS FOR CI/CD:
+#   This file is the declarative "what I want deployed" definition.
+#   Same file, different environment variables → different environments.
+#
+# =============================================================================
+
+name: foundry-agents-lifecycle
+metadata:
+  template: foundry-agents-lifecycle-demo
+
+# ---------------------------------------------------------------------------
+# Infrastructure — points to Bicep templates
+# ---------------------------------------------------------------------------
+infra:
+  provider: bicep
+  path: infra
+  module: main
+
+# ---------------------------------------------------------------------------
+# Services — the agent application
+# ---------------------------------------------------------------------------
+services:
+  agent:
+    # The agent is deployed via the Python SDK script, not as a container
+    # For hosted agents, you'd change this to a Docker-based service
+    language: python
+    host: ai.agent
+    project: src/agent
+
+# ---------------------------------------------------------------------------
+# Model Deployments
+# ---------------------------------------------------------------------------
+# These models are deployed to your Foundry project.
+# Different environments can use different models or capacities.
+#
+# In dev:  Use gpt-4o-mini (cheaper, faster iteration)
+# In prod: Use gpt-4o (better quality, higher capacity)
+# ---------------------------------------------------------------------------
+ai:
+  models:
+    - name: gpt-4o-mini
+      version: "2024-07-18"
+      sku:
+        name: GlobalStandard
+        capacity: 10    # Tokens per minute (in thousands)
+    - name: gpt-4o
+      version: "2024-11-20"
+      sku:
+        name: GlobalStandard
+        capacity: 30
