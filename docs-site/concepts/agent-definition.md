@@ -11,7 +11,7 @@ This is the most important file in the repository. It:
 1. Loads a per-environment JSON config file
 2. Reads the system prompt from a markdown file
 3. Resolves tool definitions from Python code
-4. Produces the exact parameters for `client.agents.create()`
+4. Produces the exact parameters for `agents.create_version()`
 
 ```python title="src/agent/agent_definition.py" linenums="1"
 @dataclass
@@ -24,7 +24,7 @@ class AgentConfig:
     metadata: dict
 
     def to_sdk_params(self) -> dict:
-        """Convert to the dict that agents.create() expects (SDK v2)."""
+        """Convert to the dict that agents.create_version() expects (SDK v2)."""
         from azure.ai.projects.models import PromptAgentDefinition
 
         # Filter to SDK-compatible built-in tools
@@ -48,7 +48,7 @@ class AgentConfig:
 !!! info "SDK v2 — `PromptAgentDefinition`"
     The `azure-ai-projects` SDK v2 wraps model, instructions, and tools into a
     `PromptAgentDefinition` object. This is passed as the `definition` parameter
-    to `agents.create()`. The old v1 flat-parameter style (`create_agent(model=..., instructions=...)`)
+    to `agents.create_version()`. The old v1 flat-parameter style (`create_agent(model=..., instructions=...)`)
     no longer works.
 
 ## Config File → AgentConfig → SDK Call
@@ -60,7 +60,7 @@ graph LR
     D[tools/*.py] --> B
     B --> E[AgentConfig]
     E --> F[to_sdk_params]
-    F --> G[agents.create]
+    F --> G[agents.create_version]
     style E fill:#9f6,stroke:#333
 ```
 

@@ -41,10 +41,10 @@
 
 !!! warning "There is no artifact to promote"
     Unlike containers or binaries, Foundry agents can't be exported and imported.
-    **CI/CD = recreate the agent from code** in each environment using the SDK.
+    **CI/CD = deploy the agent from code** in each environment using the SDK.
 
     This is by design. There is no export/import mechanism — your code and config
-    **are** the deployment artifact. The SDK recreates the agent fresh each time.
+    **are** the deployment artifact. The SDK creates a new versioned agent each time.
 
 ## Before You Start
 

@@ -38,7 +38,7 @@ but with different config.
 !!! info "Key Insight"
     There is no export/import or artifact promotion mechanism.
     Your code and config **are** the deployment unit. The SDK
-    recreates the agent fresh in each environment.
+    creates a new versioned agent in each environment.
 
 ## What Makes Up an Agent?
 
@@ -66,8 +66,8 @@ client = AIProjectClient(
     credential=DefaultAzureCredential()
 )
 
-agent = client.agents.create(
-    name="my-agent-dev",
+agent = client.agents.create_version(
+    agent_name="my-agent-dev",
     definition=PromptAgentDefinition(
         model="gpt-4o-mini",
         instructions="You are a helpful assistant...",
@@ -77,7 +77,7 @@ agent = client.agents.create(
 )
 ```
 
-That's it. **Everything else in this repo is plumbing around this call.**
+That's it. **Everything else in this repo is plumbing around this call.** If the agent name already exists, it creates a new version; if not, it creates the agent.
 
 - Config files → decide what parameters to pass
 - Deploy scripts → wrap this call with error handling and logging

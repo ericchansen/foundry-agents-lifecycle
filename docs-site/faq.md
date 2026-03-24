@@ -34,8 +34,9 @@ pip install -e ".[dev]"
 ### What API does the SDK call?
 
 The Azure AI Agents API (based on the OpenAI Assistants API).
-The key method is `client.agents.create()` (SDK v2). Model, instructions,
-and tools are wrapped in a `PromptAgentDefinition` object.
+The key method is `agents.create_version()` (SDK v2). Model, instructions,
+and tools are wrapped in a `PromptAgentDefinition` object. The call creates
+the agent if new, or adds a new version if it already exists.
 
 ### Does the SDK support other languages?
 

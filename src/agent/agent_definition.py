@@ -49,7 +49,7 @@ class AgentConfig:
     def to_sdk_params(self) -> dict:
         """
         Convert this config into the parameters that the
-        azure-ai-projects SDK v2 expects for agents.create().
+        azure-ai-projects SDK v2 expects for agents.create_version().
 
         SDK v2 uses a PromptAgentDefinition object instead of flat params.
         """
