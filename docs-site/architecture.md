@@ -17,13 +17,13 @@ no rollback capability. The SDK is the only path to automation.
 
 ---
 
-## Decision 2: Delete + Recreate (Not Update)
+## Decision 2: Versioned Agents (Not Delete + Recreate)
 
-**Decision:** Each deployment deletes the old agent and creates a fresh one.
+**Decision:** Each deployment creates a new **version** of the agent using `agents.create_version()`.
 
-**Why:** Guarantees the deployed agent matches code exactly. No drift.
+**Why:** Guarantees the deployed agent matches code exactly. No downtime — old version stays active until the new one is ready. Agent ID is stable across versions.
 
-**Trade-off:** Agent ID changes. Use names, not IDs, for all integrations.
+**Trade-off:** Versions accumulate (use the teardown script to clean up old agents).
 
 ---
 

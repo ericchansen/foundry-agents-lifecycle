@@ -84,20 +84,19 @@ That's it. **Everything else in this repo is plumbing around this call.**
 - CI/CD pipelines → run this call in the right environment with the right auth
 - Evaluation → validate the agent works after this call
 
-## Why Delete + Recreate?
+## Why Versioned Agents?
 
-We delete the old agent and create a fresh one on each deployment.
-When delete fails (e.g., RBAC restrictions), the script falls back to updating the existing agent.
+We create a new **version** of the agent on each deployment using `agents.create_version()`.
+If the agent name doesn't exist yet, it creates the agent. If it already exists, it adds a new version with the updated config.
 
-**Why not just update in place?**
+**Why not delete and recreate?**
 
-1. **Guarantees consistency** — the agent matches the code exactly
-2. **No drift risk** — partial updates can leave agents in inconsistent states
-3. **Simpler logic** — create is idempotent, update has edge cases
-4. **Audit trail** — metadata tracks which git commit is deployed
+1. **No downtime** — old version stays active until the new one is ready
+2. **Stable identity** — agent name persists across deployments
+3. **Audit trail** — metadata tracks which git commit is deployed per version
+4. **Simpler logic** — `create_version()` handles both new and existing agents
 
 **The trade-off:**
 
-- Agent ID changes each deployment (use names, not IDs)
-- Milliseconds of "downtime" during delete → create
-- Conversation threads don't carry over (by design — new deploy, fresh start)
+- Agent versions accumulate (use the teardown script to clean up)
+- Must ensure consumers reference the correct version or latest

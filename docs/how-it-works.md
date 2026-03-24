@@ -129,8 +129,7 @@ This script:
 3. Resolves tool definitions from Python code
 4. Builds a `PromptAgentDefinition` (SDK v2) with model, instructions, tools
 5. Connects to the DEV Foundry project
-6. Checks if the agent exists → deletes old version (or updates if delete fails)
-7. Creates a new agent via `agents.create()`
+6. Calls `agents.create_version()` — creates the agent if new, or adds a new version if it already exists
 
 ### 4c. Evaluate the Agent
 ```bash
