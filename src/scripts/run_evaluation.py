@@ -39,6 +39,101 @@ from dotenv import load_dotenv
 
 project_root = Path(__file__).parent.parent.parent
 
+# Make the repo root importable so we can call function-tool implementations
+# directly via the repo-wide `src.agent.tools...` convention.
+sys.path.insert(0, str(project_root))
+
+
+# -----------------------------------------------------------------------------
+# Function tool dispatch
+# -----------------------------------------------------------------------------
+# When the agent invokes a custom function tool (e.g. calculator), the
+# Responses API returns the call to US — the server does not execute our code.
+# We execute the function locally and submit results back to continue the run.
+#
+# To register a new tool here:
+#   1. Add execute_<name> to src/agent/tools/<name>.py
+#   2. Export it via src/agent/tools/__init__.py
+#   3. Add an entry to _build_function_tool_registry() below
+# -----------------------------------------------------------------------------
+def _build_function_tool_registry() -> dict:
+    """Build name -> executor map for all custom function tools."""
+    from src.agent.tools.calculator import execute_calculator
+    return {"calculator": execute_calculator}
+
+
+def _execute_function_tool(name: str, arguments: str) -> str:
+    """Execute a function tool and return JSON-serialized output."""
+    registry = _build_function_tool_registry()
+    if name not in registry:
+        return json.dumps({"error": f"Unknown function tool: {name}"})
+    try:
+        args = json.loads(arguments) if arguments else {}
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid arguments JSON: {e}"})
+    try:
+        result = registry[name](**args)
+    except Exception as e:  # noqa: BLE001 — surface the actual failure to the agent
+        return json.dumps({"error": f"Tool execution failed: {e}"})
+    return json.dumps(result)
+
+
+def _query_agent_with_tool_loop(
+    openai_client,
+    agent_name: str,
+    question: str,
+    max_iterations: int = 5,
+) -> tuple[str, list[dict]]:
+    """
+    Send a question to a Foundry agent via the Responses API and execute any
+    function tool calls in a loop until the agent produces a final text answer.
+
+    Returns:
+        (answer_text, tool_calls) where tool_calls is a list of
+        {"name": str, "arguments": str, "output": str} for diagnostics.
+    """
+    conversation = openai_client.conversations.create()
+    agent_ref = {"agent_reference": {"name": agent_name, "type": "agent_reference"}}
+
+    response = openai_client.responses.create(
+        conversation=conversation.id,
+        extra_body=agent_ref,
+        input=question,
+    )
+
+    executed_calls: list[dict] = []
+
+    for _ in range(max_iterations):
+        function_calls = [
+            item for item in (getattr(response, "output", None) or [])
+            if getattr(item, "type", None) == "function_call"
+        ]
+        if not function_calls:
+            break
+
+        tool_outputs = []
+        for fc in function_calls:
+            name = getattr(fc, "name", "")
+            arguments = getattr(fc, "arguments", "{}")
+            call_id = getattr(fc, "call_id", None) or getattr(fc, "id", "")
+            output = _execute_function_tool(name, arguments)
+            executed_calls.append({"name": name, "arguments": arguments, "output": output})
+            tool_outputs.append({
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": output,
+            })
+
+        response = openai_client.responses.create(
+            conversation=conversation.id,
+            extra_body=agent_ref,
+            input=tool_outputs,
+            previous_response_id=response.id,
+        )
+
+    answer = getattr(response, "output_text", "") or ""
+    return answer, executed_calls
+
 
 def _score_agent_metrics(
     openai_client,
@@ -151,28 +246,24 @@ def _run_real_evaluation(endpoint: str, eval_data: list[dict], eval_model: str =
         agent = agents_list[0]
         print(f"  Agent: {agent.name} (ID: {agent.id})")
 
-        # Step 2: Send each eval question to the agent via Responses API
+        # Step 2: Send each eval question to the agent via Responses API.
+        # We must drive a tool-call loop ourselves: when the agent invokes a
+        # function tool, the Responses API hands the call back to us and waits
+        # for `function_call_output` items before producing a text answer.
         openai_client = client.get_openai_client()
         responses = []
         for i, case in enumerate(eval_data):
             question = case.get("question", case.get("input", ""))
-            conversation = openai_client.conversations.create()
-            response = openai_client.responses.create(
-                conversation=conversation.id,
-                extra_body={
-                    "agent_reference": {
-                        "name": agent.name,
-                        "type": "agent_reference",
-                    }
-                },
-                input=question,
-            )
-            answer = response.output_text if hasattr(response, "output_text") else ""
+            answer, tool_calls = _query_agent_with_tool_loop(openai_client, agent.name, question)
+
+            if not answer:
+                print(f"  ⚠️  [{i+1}/{len(eval_data)}] empty answer; tool_calls={tool_calls}")
 
             responses.append({
                 "question": question,
                 "answer": answer,
                 "expected": case.get("expected_answer", case.get("ground_truth", "")),
+                "tool_calls": tool_calls,
             })
             print(f"  [{i+1}/{len(eval_data)}] {question[:60]}...")
 
@@ -213,6 +304,15 @@ def _run_real_evaluation(endpoint: str, eval_data: list[dict], eval_model: str =
         }
 
         for resp in responses:
+            # Empty answers crash the evaluators (which reject empty strings).
+            # Record explicit zero scores so the threshold check fails loudly
+            # with a clear "agent produced no text" signal instead of a
+            # stack trace from deep inside the evaluator SDK.
+            if not resp["answer"]:
+                scores["groundedness"].append(0.0)
+                scores["relevance"].append(0.0)
+                scores["coherence"].append(0.0)
+                continue
             g = groundedness_eval(response=resp["answer"], context=resp["expected"])
             r = relevance_eval(response=resp["answer"], query=resp["question"])
             c = coherence_eval(response=resp["answer"])
