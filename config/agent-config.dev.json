@@ -18,6 +18,7 @@
 
     "evaluation": {
         "enabled": true,
+        "model": "gpt-4o-mini",
         "dataset": "src/tests/integration/eval_dataset.jsonl",
         "thresholds": {
             "groundedness": 3.0,

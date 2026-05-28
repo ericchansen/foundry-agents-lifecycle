@@ -31,6 +31,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
@@ -97,7 +98,25 @@ def _score_agent_metrics(
     print(f"  OpenAI Evals: {len(eval_criteria)} agent-specific metrics scored")
 
 
-def _run_real_evaluation(endpoint: str, eval_data: list[dict]) -> dict[str, float]:
+def _base_ai_services_endpoint(project_endpoint: str) -> str:
+    """
+    Extract the base AI Services endpoint from a Foundry project endpoint.
+
+    Project endpoint: https://<name>.services.ai.azure.com/api/projects/<project>
+    AI Services endpoint: https://<name>.services.ai.azure.com
+
+    The evaluators need the base endpoint (not the project-scoped one)
+    because they call the Azure OpenAI completions API directly.
+    """
+    parsed = urlparse(project_endpoint)
+    path = parsed.path
+    marker = "/api/projects/"
+    if marker in path:
+        path = path.split(marker, 1)[0]
+    return urlunparse((parsed.scheme, parsed.netloc, path.rstrip("/"), "", "", ""))
+
+
+def _run_real_evaluation(endpoint: str, eval_data: list[dict], eval_model: str = "gpt-4o-mini") -> dict[str, float]:
     """
     Run real evaluation against a deployed agent using Foundry evaluators.
 
@@ -106,13 +125,18 @@ def _run_real_evaluation(endpoint: str, eval_data: list[dict]) -> dict[str, floa
 
     Requires: pip install azure-ai-evaluation
 
+    Args:
+        endpoint: Foundry project endpoint
+        eval_data: List of test cases
+        eval_model: Model deployment name to use for evaluation scoring
+
     Returns:
         Dict of metric name → average score (1.0-5.0 scale)
     """
     from azure.ai.projects import AIProjectClient
-    from azure.identity import DefaultAzureCredential
 
-    client = AIProjectClient(endpoint=endpoint, credential=DefaultAzureCredential())
+    credential = DefaultAzureCredential()
+    client = AIProjectClient(endpoint=endpoint, credential=credential)
 
     print("\n  📊 Running evaluations (REAL MODE)")
     print(f"  Sending {len(eval_data)} test cases to deployed agent...")
@@ -169,10 +193,19 @@ def _run_real_evaluation(endpoint: str, eval_data: list[dict]) -> dict[str, floa
     try:
         from azure.ai.evaluation import CoherenceEvaluator, GroundednessEvaluator, RelevanceEvaluator
 
-        model_config = {"azure_endpoint": endpoint}
-        groundedness_eval = GroundednessEvaluator(model_config=model_config)
-        relevance_eval = RelevanceEvaluator(model_config=model_config)
-        coherence_eval = CoherenceEvaluator(model_config=model_config)
+        # The evaluators need:
+        #   1. The base AI Services endpoint (not the project-scoped endpoint)
+        #   2. The model deployment name (for LLM-based scoring)
+        #   3. A credential (Entra ID auth — API keys are disabled)
+        ai_services_endpoint = _base_ai_services_endpoint(endpoint)
+        model_config = {
+            "azure_endpoint": ai_services_endpoint,
+            "azure_deployment": eval_model,
+        }
+        print(f"  Eval model: {eval_model} @ {ai_services_endpoint}")
+        groundedness_eval = GroundednessEvaluator(model_config=model_config, credential=credential)
+        relevance_eval = RelevanceEvaluator(model_config=model_config, credential=credential)
+        coherence_eval = CoherenceEvaluator(model_config=model_config, credential=credential)
 
         scores: dict[str, list[float]] = {
             "groundedness": [], "relevance": [], "coherence": [],
@@ -270,7 +303,8 @@ def run_evaluation(environment: str, fail_on_threshold: bool = True) -> bool:
     use_real = os.environ.get("USE_REAL_EVALUATION", "false").lower() == "true"
 
     if use_real:
-        results = _run_real_evaluation(endpoint, eval_data)
+        eval_model = eval_config.get("model", config.get("agent", {}).get("model", "gpt-4o-mini"))
+        results = _run_real_evaluation(endpoint, eval_data, eval_model=eval_model)
     else:
         print("\n  📊 Running evaluations (SIMULATED MODE)")
         print("  Set USE_REAL_EVALUATION=true in pipeline to use real Foundry evaluators")

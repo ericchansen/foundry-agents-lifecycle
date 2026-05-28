@@ -80,6 +80,7 @@ module foundryAccount 'modules/foundry-account.bicep' = {
     name: '${baseName}-${environment}'
     location: location
     projectName: '${baseName}-project-${environment}'
+    deployerPrincipalId: deployerPrincipalId
   }
 }
 

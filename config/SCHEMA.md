@@ -84,6 +84,7 @@ Enables the agent to search the web via Bing. Requires the `BING_CONNECTION_ID` 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `enabled` | `boolean` | Yes | Whether to run AI-assisted evaluation after deployment. Set to `false` to skip (not recommended for prod). |
+| `model` | `string` | No | Model deployment name used for LLM-based evaluation scoring (e.g., `gpt-4o-mini`). Defaults to `agent.model` if omitted. Must be a deployed model in the same AI Services account. |
 | `dataset` | `string` | Yes | Relative path to a `.jsonl` file of test cases. Each line is a JSON object with `question`, `expected_answer`, and `category` fields. |
 | `thresholds` | `object` | Yes | Minimum scores (1–5 scale) that the agent must meet. Evaluation fails if any metric falls below its threshold. |
 
