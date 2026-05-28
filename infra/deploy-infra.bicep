@@ -73,7 +73,7 @@ param pipelineSource string
 param location string = 'eastus2'
 
 @description('Base name prefix for all resources (e.g., foundry-demo)')
-param baseName string = 'foundry-demo'
+param baseName string = 'foundry-demo-qgs3j'
 
 @description('Model deployments to provision (passed through to main.bicep)')
 param modelDeployments array = [
